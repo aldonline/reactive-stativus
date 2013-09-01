@@ -1,0 +1,227 @@
+assert = require 'assert'
+refmap = require 'refmap'
+util   = require './util'
+
+
+
+SPECIAL_KEYS = 'enter after_enter exit before_exit initial'.split ' '
+SKIP_KEYS = 'constructor __super__'.split ' '
+
+###
+Helper class that allows us to isolate the traversal algorithm with
+###
+class AbstractSCNode
+  # abstract accessors
+  get_parent:   ->
+  get_children: ->
+  is_active:    ->
+  is_initial:   ->
+  # abstract handlers
+  handle_enter: ->
+  handle_after_enter: ->
+  handle_before_exit: ->
+  handle_exit: ->
+  # concrete algorithm
+  ###
+  get_ancestors: ->
+    try
+      return @get_parent()?.get_ancestors().concat [@]
+    [@]
+  ###
+  # concrete algorithm implementation
+  request_enter = -> # we are told to enter here
+    return if @is_active() # if this state is active we stop here
+    # go back to the closest active ancestor
+    p = @
+    inactive_ancestors = []
+    active_ancestor = null
+    while ( p = @get_parent() )?
+      if p.is_active()
+        active_ancestor = p
+        break
+      else
+        inactive_ancestors.push p
+    # if we found one. tell it to exit all children
+    active_ancestor?.exit_children()
+    # start entering all inactive ancestors, one by one from top to bottom
+    inactive_ancestors.reverse()
+    inactive_ancestors.push @ # add ourselves to the end of the stack
+    inactive_ancestors[0]?.enter inactive_ancestors.concat()
+  _enter: ( remaining ) ->
+    @handle_enter()
+    if remaining?[0]?
+      remaining?.shift()?._enter remaining.concat()
+    else
+      c.enter() for c in @get_children() when c.is_initial()
+    @handle_after_enter()
+  _exit_children: -> c._exit() for c in @get_children()
+  _exit: ->
+    return if not @is_active()
+    @handle_before_exit()
+    @_exit_children()
+    @handle_exit()
+    
+
+data =
+  s1:
+    s11: {}
+
+
+
+
+class SimpleNode
+  constructor: ( @name, data ) ->
+    @children = ( new SimpleNode k, v for own k, v of data )
+
+
+
+
+
+
+
+
+
+
+
+
+
+class StateChartInstance
+  constructor: ( @meta, @object ) ->
+    @_states = refmap()
+  get_state: ( state_meta ) ->
+    @_states.get_or_else state_meta, =>
+      new StateInstance @, state_meta
+
+
+class StateInstance
+  constructor: ( @statechart, @meta ) ->
+  directly_active: ->
+  indirectly_active: -> if c.indirectly_active() return true for c in @children() 
+  children: -> @_children ?= do => @statechart.get_state c for c in @meta.children()
+
+  activate_child: ( s ) ->
+    return if s.indirectly_active()
+
+
+
+
+  attach_methods: ->
+    o = @object()
+    for k, v of @meta.all_methods()
+      o[k] = v
+  detach_methods: ->
+    o = @object()
+    for k of @meta.all_methods()
+      delete o[k]
+  do_enter: ->
+
+  enter: ->
+    return if @is_active()
+    @parent?.enter_substate @
+  enter_substate: (sub) ->
+    return if @_active_substate is sub
+
+
+  object: -> @statechart.object
+  substates: ->
+
+
+
+
+
+
+
+
+
+class StateMeta
+  constructor: ( @parent, @name, data ) ->
+    @props   = {}
+    @methods = {}
+    @states  = {}
+    for k, v of data when k not in SKIP_KEYS
+      if util.is_all_uppercase k
+        @states[k] = new StateMeta @, k, v
+      else if k in SPECIAL_KEYS
+        @props[k] = v
+      else
+        assert ( typeof v is 'function' ),
+               "only methods/functions can be declared on states but #{k} is a " + typeof v
+        @methods[k] = v
+  path: -> @__path ?= if @parent? then @parent.path() + '/' + @name else @name
+  root: -> @__root ?= if @parent? then @parent.root() else @
+  children: -> @states
+  has_children: -> not util.empty @children()
+  has_methods:  -> not util.empty @methods
+  has_props:    -> not util.empty @props
+  all_methods:  -> @__all_methods ?= do =>
+    p = if @parent? then util.copy( @parent.all_methods() ) else {}
+    p[k] = v for own k, v of @methods
+    p
+
+
+  dump_lines: ->
+    lines = []
+    p = (s) -> lines.push s
+    p "State(#{@name})"
+    p "    props:"
+    for own k, v of @props
+      p "        #{k} = " + typeof v
+    if @has_methods()
+      p "    methods:"
+      for own k, v of @methods
+        p "        #{k} = " + typeof v
+    p "    all_methods:"
+    for own k, v of @all_methods()
+      p "        #{k} = " + typeof v
+    lines
+  dump: ( indent = "" ) ->
+    for line in @dump_lines()
+      console.log indent + line
+    if @has_children()
+      console.log "    states:"
+      for own k, v of @states
+        v.dump indent + "        "
+    undefined
+
+
+
+
+
+
+
+apply_mixin = ( constructor ) ->
+  p = constructor::
+  root = new StateMeta null, 'ROOT', p
+  p.init_statechart = ->
+    @__statechart ?= new StateChart root, this
+  root.dump()
+
+
+
+do test1 = ->
+
+  class Thing
+    get_weight: -> 
+
+  class Person extends Thing
+    enter: -> 'enter root state'
+    say_hello: -> 'Hello'
+    kiss: -> @to 'HAPPY'
+    beat: -> @to 'SAD'
+    NORMAL:
+      initial: yes
+      enter: -> 'entering normal state'
+    HAPPY:
+      enter: -> 'entering happy state'
+      say_hello: -> 'Hello I am Happy'
+      smile: -> 
+    SAD:
+      enter: -> 'entering sad state'
+      say_hello: -> 'Hello I am Sad'
+      cry: -> 
+
+  apply_mixin Person
+
+  p1 = new Person
+  console.log p1.say_hello()
+
